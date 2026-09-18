@@ -31,6 +31,11 @@ void clearScreen()
 void enableANSI()
 {
 #ifdef _WIN32
+    // Use UTF-8 for Windows console input/output so box-drawing
+    // characters and other Unicode text are displayed correctly.
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
 
     if (hOut != INVALID_HANDLE_VALUE)
