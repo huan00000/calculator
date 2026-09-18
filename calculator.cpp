@@ -42,5 +42,9 @@ int main() {
 
     std::cout << "Result: " << result << '\n';
 
+    std::cout << "Press Enter to exit...";
+    std::cin.ignore();
+    std::cin.get();
+
     return 0;
 }
