@@ -24,17 +24,14 @@ jobs:
           # Linux
           - os: ubuntu-latest
             artifact_name: calculator-linux
-            executable: calculator
 
           # Windows
           - os: windows-latest
             artifact_name: calculator-windows
-            executable: calculator.exe
 
           # macOS
           - os: macos-latest
             artifact_name: calculator-macos
-            executable: calculator
 
     runs-on: ${{ matrix.os }}
 
@@ -42,71 +39,207 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # =========================
+      # ============================================================
       # Linux
-      # =========================
+      # ============================================================
       - name: Build on Linux
         if: runner.os == 'Linux'
         run: |
-          g++ -std=c++17 -Wall -Wextra -Wpedantic -O2 calculator.cpp -o calculator
+          mkdir -p dist
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -O2 \
+            calculator.cpp \
+            -o dist/calculator
 
       - name: Test on Linux
         if: runner.os == 'Linux'
         run: |
-          echo "10 + 20" | ./calculator
-          echo "100 / 4" | ./calculator
-          echo "7 * 8" | ./calculator
+          echo "10 + 20" | ./dist/calculator
+          echo "100 / 4" | ./dist/calculator
+          echo "7 * 8" | ./dist/calculator
 
-      # =========================
+      # ============================================================
       # Windows
-      # =========================
+      #
+      # 使用 GitHub Windows Runner 自带的 MinGW g++。
+      # 编译完成后把需要的 MinGW Runtime DLL 自动复制到 dist。
+      # ============================================================
       - name: Build on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          g++ -std=c++17 -Wall -Wextra -Wpedantic -O2 calculator.cpp -o calculator.exe
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
 
+          Write-Host "=== g++ information ==="
+          g++ --version
+
+          $gpp = (Get-Command g++).Source
+          Write-Host "g++ path: $gpp"
+
+          # 动态链接编译。
+          # 不使用 -static，因为我们的目标就是把所需 DLL
+          # 一起放入下载的 ZIP。
+          g++ `
+            -std=c++17 `
+            -Wall `
+            -Wextra `
+            -Wpedantic `
+            -O2 `
+            calculator.cpp `
+            -o dist/calculator.exe
+
+          if (!(Test-Path "dist/calculator.exe")) {
+            throw "calculator.exe was not created."
+          }
+
+          Write-Host ""
+          Write-Host "=== calculator.exe created ==="
+          Get-Item "dist/calculator.exe"
+
+      # ============================================================
+      # Copy MinGW runtime DLLs
+      # ============================================================
+      - name: Copy Windows runtime DLLs
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gpp = (Get-Command g++).Source
+          $gccBin = Split-Path $gpp -Parent
+
+          Write-Host "GCC bin directory: $gccBin"
+
+          # DLLs commonly required by MinGW-built C++ programs.
+          #
+          # libstdc++-6.dll       -> C++ standard library
+          # libgcc_s_seh-1.dll    -> GCC runtime
+          # libwinpthread-1.dll   -> MinGW pthread runtime
+          #
+          # Different runner/toolchain versions may not need all of them,
+          # so only existing DLLs are copied.
+
+          $runtimeDlls = @(
+            "libstdc++-6.dll",
+            "libgcc_s_seh-1.dll",
+            "libgcc_s_sjlj-1.dll",
+            "libgcc_s_dw2-1.dll",
+            "libwinpthread-1.dll"
+          )
+
+          foreach ($dll in $runtimeDlls) {
+            $source = Join-Path $gccBin $dll
+
+            if (Test-Path $source) {
+              Write-Host "Copying: $source"
+              Copy-Item $source "dist\$dll" -Force
+            }
+            else {
+              Write-Host "Not present / not required: $dll"
+            }
+          }
+
+          Write-Host ""
+          Write-Host "=== Windows distribution contents ==="
+          Get-ChildItem dist
+
+      # ============================================================
+      # Verify Windows DLL dependencies
+      # ============================================================
+      - name: Show Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "=== objdump dependencies ==="
+
+          $output = objdump -p dist/calculator.exe |
+            Select-String "DLL Name"
+
+          $output | ForEach-Object {
+            Write-Host $_.Line
+          }
+
+          Write-Host ""
+          Write-Host "=== Packaged MinGW DLLs ==="
+
+          Get-ChildItem dist -Filter "*.dll" |
+            ForEach-Object {
+              Write-Host $_.Name
+            }
+
+      # ============================================================
+      # Test Windows version WITH packaged DLLs
+      # ============================================================
       - name: Test on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          "10 + 20" | .\calculator.exe
-          "100 / 4" | .\calculator.exe
-          "7 * 8" | .\calculator.exe
+          Push-Location dist
 
-      # =========================
+          "10 + 20" | .\calculator.exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows test 1 failed."
+          }
+
+          "100 / 4" | .\calculator.exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows test 2 failed."
+          }
+
+          "7 * 8" | .\calculator.exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows test 3 failed."
+          }
+
+          Pop-Location
+
+      # ============================================================
       # macOS
-      # =========================
+      # ============================================================
       - name: Build on macOS
         if: runner.os == 'macOS'
         run: |
-          clang++ -std=c++17 -Wall -Wextra -Wpedantic -O2 calculator.cpp -o calculator
+          mkdir -p dist
+
+          clang++ \
+            -std=c++17 \
+            -Wall \
+            -Wextra \
+            -Wpedantic \
+            -O2 \
+            calculator.cpp \
+            -o dist/calculator
 
       - name: Test on macOS
         if: runner.os == 'macOS'
         run: |
-          echo "10 + 20" | ./calculator
-          echo "100 / 4" | ./calculator
-          echo "7 * 8" | ./calculator
+          echo "10 + 20" | ./dist/calculator
+          echo "100 / 4" | ./dist/calculator
+          echo "7 * 8" | ./dist/calculator
 
-      # =========================
-      # Upload build artifacts
-      # =========================
-      - name: Upload executable
+      # ============================================================
+      # Upload artifacts
+      #
+      # 注意这里上传整个 dist，而不是只上传 calculator.exe。
+      # GitHub Actions 会自动生成 ZIP。
+      # ============================================================
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.executable }}
+          path: dist/
           if-no-files-found: error
 
-  # =============================
-  # Create GitHub Release
-  # Only runs when pushing v* tag
-  # =============================
+
+  # ==============================================================
+  # GitHub Release
+  #
+  # 只有 push v* tag 时执行。
+  # Windows Release 使用 ZIP，因为 EXE 必须和 DLL 放在一起。
+  # ==============================================================
   release:
     name: Create Release
     needs: build
+
     if: startsWith(github.ref, 'refs/tags/v')
+
     runs-on: ubuntu-latest
 
     steps:
@@ -117,31 +250,56 @@ jobs:
 
       - name: Show downloaded files
         run: |
-          find artifacts -type f
+          echo "=== Downloaded artifacts ==="
+          find artifacts -type f -print
 
       - name: Prepare release files
         run: |
           mkdir -p release
 
-          cp artifacts/calculator-windows/calculator.exe \
-            release/calculator-windows.exe
+          # --------------------------------------------------------
+          # Windows
+          #
+          # EXE + DLL 必须放在同一个 ZIP 中。
+          # --------------------------------------------------------
+          cd artifacts/calculator-windows
 
-          cp artifacts/calculator-linux/calculator \
+          zip -9 -r ../../release/calculator-windows.zip .
+
+          cd ../..
+
+          # --------------------------------------------------------
+          # Linux
+          # --------------------------------------------------------
+          cp \
+            artifacts/calculator-linux/calculator \
             release/calculator-linux
 
-          cp artifacts/calculator-macos/calculator \
+          chmod +x release/calculator-linux
+
+          # --------------------------------------------------------
+          # macOS
+          # --------------------------------------------------------
+          cp \
+            artifacts/calculator-macos/calculator \
             release/calculator-macos
 
-          chmod +x release/calculator-linux
           chmod +x release/calculator-macos
 
+          echo ""
+          echo "=== Release files ==="
           ls -lh release
+
+          echo ""
+          echo "=== Windows ZIP contents ==="
+          unzip -l release/calculator-windows.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release/calculator-windows.exe
+            release/calculator-windows.zip
             release/calculator-linux
             release/calculator-macos
+
           generate_release_notes: true
